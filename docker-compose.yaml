@@ -1,0 +1,204 @@
+name: mahrostack
+
+services:   
+  land:
+    image: ghcr.io/mahrostack/mahrostack-land:${LAND_DOCKER_IMAGE_VERSION}
+    container_name: mahrostack_land
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    env_file:
+      - ./env/.env.land
+      - ./.env
+        
+    healthcheck:
+      test: ["CMD-SHELL", "curl http://localhost:8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    mem_limit: 128m
+    cpus: "0.25"
+    
+    networks:
+      - edge-network
+
+  # app:
+  #   image: ghcr.io/mahrostack/mahrostack-app:${APP_DOCKER_IMAGE_VERSION}
+  #   container_name: mahrostack_app
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./env/.env.app
+      
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "5m"
+  #       max-file: "2"
+      
+  #   ulimits:
+  #     nofile:
+  #       soft: 65536
+  #       hard: 65536
+
+  #   mem_limit: 128m
+  #   cpus: "0.25"
+
+  #   healthcheck:
+  #     test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 5s
+
+  #   networks:
+  #     - edge-network
+      
+  dash:
+    image: ghcr.io/mahrostack/mahrostack-dash:${DASH_DOCKER_IMAGE_VERSION}
+    container_name: mahrostack_dash
+    restart: unless-stopped
+    env_file:
+      - ./env/.env.dash
+      
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+      
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    mem_limit: 128m
+    cpus: "0.25"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+    networks:
+      - edge-network
+
+  # # s3.qabas.one
+  # minio:
+  #   image: minio/minio:latest
+  #   container_name: mahrostack_minio
+  #   command: server /data --console-address ":9001"
+  #   restart: unless-stopped
+
+  #   env_file:
+  #     - ./env/.env.minio
+      
+  #   environment:
+  #     - MINIO_SERVER_URL=https://s3.qabas.one
+  #     - MINIO_BROWSER_REDIRECT_URL=https://s3c.qabas.one
+
+  #   volumes:
+  #     - minio-data:/data
+
+  #   networks:
+  #     - edge-network
+
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/ready || exit 1"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 3
+
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "5"
+
+  #   security_opt:
+  #     - no-new-privileges:true
+
+  #   read_only: false  # must remain writable
+
+  #   tmpfs:
+  #     - /tmp
+    
+
+  api:
+    image: ghcr.io/mahrostack/mahrostack-api:${API_DOCKER_IMAGE_VERSION}
+    container_name: mahrostack_api
+    restart: unless-stopped
+
+    env_file:
+      - ./env/.env.api
+      - ./.env
+
+    expose:
+      - "3030"
+
+    networks:
+      - edge-network
+      # - postgres-shared
+      # - redis-shared
+
+
+    # depends_on:
+    #   minio:
+    #     condition: service_healthy
+    #   gotenberg:
+    #     condition: service_healthy
+     
+        
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('http').get({ hostname: '127.0.0.1', port: 3030, path: '/health', headers: { 'User-Agent': 'mahrostack.api' } }, r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""
+        ]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+          pids: 256
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+
+volumes:
+  minio-data:
+
+  
+networks:
+  edge-network:
+    external: true
+  # postgres-shared:
+  #   external: true  
+  # redis-shared:
+  #   external: true
+  # print-network:
+  #   external: true

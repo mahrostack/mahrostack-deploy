@@ -1,0 +1,273 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: infra_mysql
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+
+    command:
+      - --skip-name-resolve
+      - --max_connections=300
+      - --innodb_buffer_pool_size=512M
+      - --innodb_log_file_size=128M
+      - --innodb_flush_log_at_trx_commit=1
+      - --sync_binlog=1
+      - --sql_mode=STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+
+
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+    networks:
+      mysql-shared:
+        aliases:
+          - infra-mysql
+
+    secrets:
+      - mysql_root_password
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+    security_opt:
+      - no-new-privileges:true
+
+    init: true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+        
+  redis:
+    # Prod-Ready: Pinning to Alpine reduces the attack surface and image size.
+    image: redis:7.2-alpine
+    container_name: infra_redis
+    
+    # FIX: Explicitly run as the redis user to match your tmpfs permissions 
+    # and avoid running as root altogether.
+    #user: "999:999"
+
+    command: >
+      sh -c '
+      REDIS_PASSWORD="$$(cat /run/secrets/redis_password)" &&
+      exec redis-server \
+        --port 6379 \
+        --protected-mode yes \
+        --requirepass "$$REDIS_PASSWORD" \
+        --appendonly no \
+        --save "" \
+        --dir /redis/data \
+        --maxmemory 512mb \
+        --maxmemory-policy allkeys-lru
+      '
+
+    networks:
+      - redis-shared
+
+    secrets:
+      - redis_password
+    
+    restart: unless-stopped
+
+    healthcheck:
+      # Prod-Ready: Passing the password via REDISCLI_AUTH prevents the 
+      # password from being visible in the container's process list (ps aux).
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.50"
+          pids: 256
+
+    # Basic container hardening
+    init: true
+    read_only: true  # Prod-Ready(make it false): Locks down the root filesystem since Redis only needs /data and /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    
+    tmpfs:
+      - /redis/tmp:rw,noexec,nosuid,size=64m
+      #- /redis/data:rw,noexec,nosuid,size=64m,uid=999,gid=999,mode=0770
+      - /redis/data:rw,noexec,nosuid,size=64m,mode=1777
+
+    # Keep logs bounded
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+
+  postgres:
+    image: postgres:17.9-alpine
+    container_name: infra_postgres
+    restart: unless-stopped
+    shm_size: 256mb
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - min_wal_size=80MB
+      - -c
+      - log_timezone=UTC
+      - -c
+      - timezone=UTC
+      
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      postgres-shared:
+        aliases:
+          - qabas-postgres
+
+    ports:
+      - "127.0.0.1:5432:5432"
+      
+    secrets:
+      - postgres_password
+      - postgres_accounting_password
+      - postgres_auth_password
+      - postgres_workflow_password
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    init: true
+    
+
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+
+  adminer:
+    image: adminer:latest
+    container_name: infra_adminer
+    restart: unless-stopped
+  
+    ports:
+      - 8080
+  
+    networks:
+      - mysql-shared
+      - postgres-shared
+  
+    depends_on:
+      - mysql
+      - postgres
+  
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+  
+    security_opt:
+      - no-new-privileges:true
+  
+    init: true
+
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    container_name: infra_phpmyadmin
+    restart: unless-stopped
+
+    environment:
+      PMA_HOST: infra-mysql
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 0
+      UPLOAD_LIMIT: 256M
+
+    networks:
+      - mysql-shared
+
+    depends_on:
+      - mysql
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    # IMPORTANT: expose ONLY UI, not DB
+    ports:
+      - "8080:80"
+
+
+secrets:
+  redis_password:
+    file: ./secrets/redis_password
+
+  postgres_password:
+    file: ./secrets/postgres_password
+  postgres_accounting_password:
+    file: ./secrets/postgres_accounting_password
+  postgres_auth_password:
+    file: ./secrets/postgres_auth_password
+  postgres_workflow_password:
+    file: ./secrets/postgres_workflow_password
+  mysql_root_password:
+    file: ./secrets/mysql_root_password
+      
+volumes:
+  postgres-data:
+  mysql-data:
+
+networks:
+  redis-shared:
+    external: true
+    name: redis-shared
+
+  postgres-shared:
+    external: true
+    name: postgres-shared
+
+  mysql-shared:
+    external: true
+    name: mysql-shared
