@@ -1,4 +1,4 @@
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
-subjectAltName=DNS:mahrostack.local,DNS:*.mahrostack.local
+subjectAltName=DNS:mahrostack.test,DNS:*.mahrostack.test
